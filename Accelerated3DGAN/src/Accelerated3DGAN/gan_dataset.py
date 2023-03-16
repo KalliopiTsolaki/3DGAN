@@ -47,6 +47,12 @@ import math
 
 import json
 
+def get_parser():
+    parser = argparse.ArgumentParser(description='TFRecord dataset Params' )
+    parser.add_argument('--datapath', action='store', type=str, default='', help='HDF5 files to convert.')
+    parser.add_argument('--outpath', action='store', type=str, default='', help='Dir to save the tfrecord files.')
+    return parser
+
 # Divide files in train and test lists
 def DivideFiles(
     FileSearch="/data/LCD/*/*.h5",
@@ -271,3 +277,64 @@ def RetrieveTFRecordpreprocessing(recorddatapaths, batch_size):
 
     return parsed_dataset
     # return parsed_dataset, ds_size
+
+#convert dataset with preprocessing
+def ConvertH5toTFRecordPreprocessing(datafile,filenumber,datadirectory):
+    # read file
+    print('Loading Data from .....', datafile)
+    f=h5py.File(datafile,'r')
+    
+    dataset = GetDataAngleParallel(f)
+
+    dataset = tf.data.Dataset.from_tensor_slices((dataset.get('X'),dataset.get('Y'),dataset.get('ang'),dataset.get('ecal')))#.batch(128)
+
+    tf.print(dataset)
+
+    
+    print('Start')
+    def serialize(feature1,feature2,feature3,feature4):
+        finaldata = tf.train.Example(
+            features=tf.train.Features( 
+                feature={
+                    'X': convert_ECAL(feature1), #float32
+                    #'ecalsize': convert_int_feature(list(dataset.get('X').shape)), #needs size of ecal so it can reconstruct the array
+                    'Y': convert_floats(feature2, 'Y'), #float32
+                    'ang': convert_floats(feature3, 'ang'), #float32
+                    'ecal': convert_floats(feature4, 'ecal'), #float64
+                }
+            )
+        )
+        #seri += 1
+        #print(seri)
+        return finaldata.SerializeToString()
+
+    def serialize_example(f0,f1,f2,f3):
+        tf_string = tf.py_function(serialize,(f0,f1,f2,f3),tf.string)
+        return tf.reshape(tf_string, ())
+
+
+    serialized_dataset = dataset.map(serialize_example)
+    print(serialized_dataset) 
+        
+
+    filename = datadirectory + '/Ele_VarAngleMeas_100_200_{0:03}.tfrecords'.format(filenumber)
+    print('Writing data in .....', filename)
+    writer = tf.data.experimental.TFRecordWriter(str(filename))
+    writer.write(serialized_dataset)
+
+    return serialized_dataset
+
+if __name__ == '__main__':
+    parser = get_parser()
+    params = parser.parse_args()
+    datapath = params.datapath# Data path
+    outpath = params.outpath # training output
+    Files = sorted( glob.glob(datapath))
+    print ("Found {} files. ".format(len(Files)))
+
+    filenumber = 0
+
+    for f in Files:
+        print(filenumber)
+        finaldata = ConvertH5toTFRecordPreprocessing(f,filenumber,outpath)
+        filenumber += 1
