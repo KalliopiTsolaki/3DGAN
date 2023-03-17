@@ -53,6 +53,15 @@ def get_parser():
     parser.add_argument('--outpath', action='store', type=str, default='', help='Dir to save the tfrecord files.')
     return parser
 
+    
+def convert_ECAL(ecalarray, xscale=1):
+    featurelist = np.array(ecalarray)
+    flat = featurelist.flatten()
+    return tf.train.Feature(float_list=tf.train.FloatList(value=flat))
+
+def convert_floats(featdataset, feature):
+    return tf.train.Feature(float_list=tf.train.FloatList(value=[featdataset]))
+
 # Divide files in train and test lists
 def DivideFiles(
     FileSearch="/data/LCD/*/*.h5",
