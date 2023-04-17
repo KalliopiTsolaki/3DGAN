@@ -13,7 +13,7 @@ except ImportError:
 
 import argparse
 import sys
-import h5py
+#import h5py
 import numpy as np
 import time
 import math
@@ -158,7 +158,8 @@ def BitFlip(x, prob=0.05):
 
 # Training
 
-
+#@tf.function(jit_compile=True)
+tf.function()
 def Train_steps(
     dataset,
     generator,
@@ -218,7 +219,7 @@ def Train_steps(
 
     # ------------Minimize------------
     # aggregate_grads_outside_optimizer = (optimizer._HAS_AGGREGATE_GRAD and not isinstance(strategy.extended, parameter_server_strategy.))
-    gradients = optimizer_discriminator._clip_gradients(gradients)
+    #gradients = optimizer_discriminator._clip_gradients(gradients)
 
     # --------------------------------
 
@@ -239,7 +240,7 @@ def Train_steps(
     gradients = tape.gradient(
         fake_batch_loss, discriminator.trainable_variables
     )  # model.trainable_variables or  model.trainable_weights
-    gradients = optimizer_discriminator._clip_gradients(gradients)
+    #gradients = optimizer_discriminator._clip_gradients(gradients)
     optimizer_discriminator.apply_gradients(
         zip(gradients, discriminator.trainable_variables)
     )  # model.trainable_variables or  model.trainable_weights
@@ -267,7 +268,7 @@ def Train_steps(
         gradients = tape.gradient(
             loss, generator.trainable_variables
         )  # model.trainable_variables or  model.trainable_weights
-        gradients = optimizer_generator._clip_gradients(gradients)
+        #gradients = optimizer_generator._clip_gradients(gradients)
         optimizer_generator.apply_gradients(
             zip(gradients, generator.trainable_variables)
         )  # model.trainable_variables or  model.trainable_weights
@@ -319,6 +320,7 @@ def Test_steps(
         (tf.reshape(energy_batch, (-1, 1)), tf.reshape(ang_batch, (-1, 1)), noise),
         axis=1,
     )
+    print(generator_ip.shape)
     generated_images = generator(generator_ip, training=False)
 
     # concatenate to fake and real batches
@@ -365,7 +367,7 @@ def Test_steps(
     )
 
 
-@tf.function
+@tf.function()
 def distributed_train_step(
     strategy,
     dataset,
@@ -495,7 +497,7 @@ def distributed_train_step(
     return real_batch_loss, fake_batch_loss, gen_losses
 
 
-@tf.function
+@tf.function()
 def distributed_test_step(
     strategy,
     dataset,

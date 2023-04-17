@@ -24,6 +24,8 @@ from tensorflow.keras.models import Model
 from tensorflow.keras.optimizers import Adadelta, Adam, RMSprop
 from tensorflow.keras.utils import Progbar
 
+from tensorflow.python.framework.convert_to_constants import convert_variables_to_constants_v2_as_graph
+
 from tensorflow.compat.v1.keras.layers import BatchNormalization
 from tensorflow.keras.layers import (
     Input,
@@ -135,6 +137,9 @@ def get_parser():
     )
 
     parser.add_argument("--tlab", action="store", default=False)
+    parser.add_argument("--profiling", action='store_true', default=False)
+    parser.add_argument("--use_tf32", action='store_true', default=False)
+    parser.add_argument("--use_precision", action='store', default=None)
     return parser
 
 
@@ -184,6 +189,18 @@ def main_gan():
         nb_epochs = params.nbepochs
     if not params.batchsize == "":
         batch_size = params.batchsize
+        
+    #profilling options:
+    profiling = params.profiling
+    use_tf32 = params.use_tf32
+    use_precision = params.use_precision
+    if profiling:
+        tf.config.experimental.enable_tensor_float_32_execution(use_tf32)
+        if use_precision != None:
+            tf.keras.mixed_precision.set_global_policy(use_precision)
+        print(tf.config.experimental.tensor_float_32_execution_enabled())
+        print(batch_size)
+            
 
     if use_gpus:
         if multi_node:
@@ -288,8 +305,8 @@ def main_gan():
             "gs://renato-tpu-bucket/tfrecordsprepoc/Ele_VarAngleMeas_100_200_027.tfrecords",
         ]
 
-    print(Trainfiles)
-    print(Testfiles)
+    #print(Trainfiles)
+    #print(Testfiles)
 
     nb_Test = int(
         nEvents * f[1]
@@ -359,12 +376,18 @@ def main_gan():
         nbatch = 0
 
         print("Number of Batches: ", steps_per_epoch)
+        
+        #tf.reset_default_graph()
+        if profiling:
+            time_average = 0
 
         for _ in range(steps_per_epoch):
             file_time = time.time()
 
             # Discriminator Training
             if use_gpus:
+                #tf.profiler.experimental.start('logdir')
+                tf.compat.v1.reset_default_graph()
                 real_batch_loss, fake_batch_loss, gen_losses = distributed_train_step(
                     strategy,
                     dist_dataset_iter,
@@ -377,6 +400,52 @@ def main_gan():
                     optimizer_discriminator,
                     optimizer_generator,
                 )
+                if profiling:
+                    #print(tf.config.experimental.tensor_float_32_execution_enabled())
+                    #print( "Time taken by batch training was",str(time.time() - file_time),"seconds.")
+                    if nbatch > 0:
+                        time_average += (time.time() - file_time)
+                    #tf.profiler.experimental.stop()
+                    graph = distributed_train_step.get_concrete_function(
+                        strategy,
+                        dist_dataset_iter,
+                        generator,
+                        discriminator,
+                        latent_size,
+                        batch_size_per_replica,
+                        batch_size,
+                        loss_weights,
+                        optimizer_discriminator,
+                        optimizer_generator,
+                    ).graph #_list_all_concrete_functions()
+                    #frozen_func, graph_def = convert_variables_to_constants_v2_as_graph(graph)
+                    #print(graph)
+                    #print(graph[-1])
+                    #return
+                    #graph = graph[-1].graph
+                    #graph = tf.get_default_graph()
+                    #builder = tf.compat.v1.profiler.ProfileOptionBuilder
+                    #opts = (builder(builder.trainable_variables_parameter()).with_file_output("trainning_flops.log").with_accounted_types(['.*']).select(["float_ops"]).order_by("float_ops").build())
+                    #flops = tf.profiler.profile(graph, options=tf.profiler.ProfileOptionBuilder.float_operation())
+                    #tfprof_node = tf.compat.v1.profiler.profile(graph, options=opts)
+                    ###
+                    run_meta = tf.compat.v1.RunMetadata()
+                    opts = (tf.compat.v1.profiler.ProfileOptionBuilder(tf.compat.v1.profiler.ProfileOptionBuilder.float_operation()).with_empty_output().build())
+                    #opts = (tf.compat.v1.profiler.ProfileOptionBuilder(tf.compat.v1.profiler.ProfileOptionBuilder.float_operation()).with_max_depth(3).build())
+                    #opts = tf.compat.v1.profiler.ProfileOptionBuilder.float_operation()
+                    flops = tf.compat.v1.profiler.profile(graph=graph,run_meta=run_meta, cmd='op', options=opts)
+                    #print(flops)
+                    if nbatch == 0:
+                        #print(flops)
+                        print('FLOP = ', flops.total_float_ops)# / 2)
+                    #return
+                    #####
+    #                 graph = generator.graph
+    #                 builder = tf.compat.v1.profiler.ProfileOptionBuilder
+    #                 opts = (builder(builder.trainable_variables_parameter()).with_file_output("generator_flops.log").with_accounted_types(['.*']).select(["float_ops"]).build())
+    #                 #flops = tf.profiler.profile(graph, options=tf.profiler.ProfileOptionBuilder.float_operation())
+    #                 tfprof_node = tf.compat.v1.profiler.profile(graph, options=opts)
+                    #return
             else:
                 gen_losses = []
                 (
@@ -497,14 +566,14 @@ def main_gan():
 
             epoch_gen_loss.append(generator_loss)
 
-            print(
-                "Time taken by batch",
-                str(nbatch),
-                " was",
-                str(time.time() - file_time),
-                "seconds.",
-            )
+            #print("Time taken by batch",str(nbatch)," was",str(time.time() - file_time),"seconds.")
+            
             nbatch += 1
+            
+            if nbatch == 6:
+                print('Average per batch was: ', str(time_average / (nbatch - 1)))
+                print("Time taken by batch", str(nbatch)," was",str(time.time() - file_time),"seconds.")
+                break
 
         print(
             "Time taken by epoch{} was {} seconds.".format(
@@ -530,11 +599,12 @@ def main_gan():
         # Test process will also be accomplished in batches to reduce memory consumption
         print("\nTesting for epoch {}:".format(epoch))
         test_start = time.time()
+        time_average = 0
 
         # Testing
         # add Testfiles, nb_test_batches, daxis, daxis2, X_train(??), loss_ftn, combined
         for _ in range(test_steps_per_epoch):
-
+            file_test_time = time.time()
             this_batch_size = 128  # can be removed (should)
 
             if use_gpus:
@@ -548,6 +618,17 @@ def main_gan():
                     batch_size,
                     loss_weights,
                 )
+                if profiling:
+                    if index > 0:
+                        time_average += (time.time() - file_test_time)
+                    #print( "Time taken by batch testing was",str(time.time() - file_test_time),"seconds.")
+                    graph = distributed_test_step._list_all_concrete_functions()[-1].graph
+                    run_meta = tf.compat.v1.RunMetadata()
+                    opts = (tf.compat.v1.profiler.ProfileOptionBuilder(tf.compat.v1.profiler.ProfileOptionBuilder.float_operation()).with_empty_output().build())
+                    #opts = tf.compat.v1.profiler.ProfileOptionBuilder.float_operation()
+                    flops = tf.compat.v1.profiler.profile(graph=graph,run_meta=run_meta, cmd='op', options=opts)
+                    if index == 0:
+                        print('FLOP = ', flops.total_float_ops)# / 2)
             else:
                 (
                     disc_test_loss_1,
@@ -605,6 +686,10 @@ def main_gan():
             disc_test_loss.append(disc_eval_loss)
             # evaluate generator loss
             gen_test_loss.append(gen_eval_loss)
+            
+            if index == 6:
+                print('Average per batch was: ', str(time_average / (index - 1)))
+                return
 
         # --------------------------------------------------------------------------------------------
         # ------------------------------ Updates -----------------------------------------------------

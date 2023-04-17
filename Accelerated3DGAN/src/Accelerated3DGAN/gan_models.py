@@ -138,21 +138,9 @@ def ecal_angle(image, daxis):
     masked_events = K.sum(amask)  # counting zero sum events
 
     # ref denotes barycenter as that is our reference point
-    x_ref = K.sum(
-        K.sum(image, axis=(2, 3))
-        * (K.cast(K.expand_dims(K.arange(x_shape), 0), dtype="float32") + 0.5),
-        axis=1,
-    )  # sum for x position * x index
-    y_ref = K.sum(
-        K.sum(image, axis=(1, 3))
-        * (K.cast(K.expand_dims(K.arange(y_shape), 0), dtype="float32") + 0.5),
-        axis=1,
-    )
-    z_ref = K.sum(
-        K.sum(image, axis=(1, 2))
-        * (K.cast(K.expand_dims(K.arange(z_shape), 0), dtype="float32") + 0.5),
-        axis=1,
-    )
+    x_ref = K.sum(K.sum(image, axis=(2, 3)) * (K.cast(K.expand_dims(K.arange(x_shape), 0), dtype=image.dtype) + 0.5), axis=1)  # sum for x position * x index
+    y_ref = K.sum(K.sum(image, axis=(1, 3))* (K.cast(K.expand_dims(K.arange(y_shape), 0), dtype=image.dtype) + 0.5),axis=1)
+    z_ref = K.sum(K.sum(image, axis=(1, 2))* (K.cast(K.expand_dims(K.arange(z_shape), 0), dtype=image.dtype) + 0.5),axis=1)
     x_ref = tf.where(
         K.equal(sumtot, 0.0), K.ones_like(x_ref), x_ref / sumtot
     )  # return max position if sumtot=0 and divide by sumtot otherwise
@@ -169,9 +157,9 @@ def ecal_angle(image, daxis):
     zmask = tf.where(K.equal(sumz, 0.0), K.zeros_like(sumz), K.ones_like(sumz))
 
     x = K.expand_dims(K.arange(x_shape), 0)  # x indexes
-    x = K.cast(K.expand_dims(x, 2), dtype="float32") + 0.5
+    x = K.cast(K.expand_dims(x, 2), dtype=image.dtype) + 0.5
     y = K.expand_dims(K.arange(y_shape), 0)  # y indexes
-    y = K.cast(K.expand_dims(y, 2), dtype="float32") + 0.5
+    y = K.cast(K.expand_dims(y, 2), dtype=image.dtype) + 0.5
 
     # barycenter for each z position
     x_mid = K.sum(K.sum(image, axis=2) * x, axis=1)
@@ -184,7 +172,7 @@ def ecal_angle(image, daxis):
     )  # if sum != 0 then divide by sum
 
     # Angle Calculations
-    z = (K.cast(K.arange(z_shape), dtype="float32") + 0.5) * K.ones_like(
+    z = (K.cast(K.arange(z_shape), dtype=image.dtype) + 0.5) * K.ones_like(
         z_ref
     )  # Make an array of z indexes for all events
     zproj = K.sqrt(
@@ -253,20 +241,21 @@ def discriminator_model(power=1.0, dformat="channels_last"):
     x = AveragePooling3D((2, 2, 2))(x)
     h = Flatten()(x)
 
-    dnn = Model(image, h)
-    dnn.summary()
+    dnn = Model(image, h, name='Discriminator_base')
+    #dnn.summary()
 
     dnn_out = dnn(image)
-    fake = Dense(1, activation="sigmoid", name="generation")(dnn_out)
-    aux = Dense(1, activation="linear", name="auxiliary")(dnn_out)
-    inv_image = Lambda(K.pow, arguments={"a": 1.0 / power})(
-        image
-    )  # get back original image
+    fake = Dense(1, name="generation_dense")(dnn_out)
+    fake = Activation('sigmoid', dtype='float32', name='generation')(fake)
+    aux = Dense(1, name="auxiliary_dense")(dnn_out)
+    aux = Activation('linear', dtype='float32', name="auxiliary")(aux)
+    inv_image = Lambda(K.pow, arguments={"a": 1.0 / power})(image)  # get back original image
     ang = Lambda(ecal_angle, arguments={"daxis": daxis})(inv_image)  # angle calculation
     ecal = Lambda(ecal_sum, arguments={"daxis": daxis2})(inv_image)  # sum of energies
     # add_loss = Lambda(count, arguments={'daxis':daxis2})(inv_image) # loss for bin counts
-    Model(inputs=[image], outputs=[fake, aux, ang, ecal]).summary()  # removed add_loss
-    return Model(inputs=[image], outputs=[fake, aux, ang, ecal])  # removed add_loss
+    model = Model(inputs=[image], outputs=[fake, aux, ang, ecal], name='Discriminator') # removed add_loss
+    #model.summary()
+    return model
 
 
 def generator_model(
@@ -309,12 +298,13 @@ def generator_model(
             Conv3D(6, (3, 3, 3), padding="valid", kernel_initializer="he_uniform"),
             Activation("relu"),
             Conv3D(1, (2, 2, 2), padding="valid", kernel_initializer="glorot_normal"),
-            Activation("relu"),
-        ]
+            Activation("relu", dtype='float32'),
+        ], name='Generator_base'
     )
     latent = Input(shape=(latent_size,))
     fake_image = loc(latent)
-    loc.summary()
-    Model(inputs=[latent], outputs=[fake_image]).summary()
+    #loc.summary()
+    model = Model(inputs=[latent], outputs=[fake_image], name='Generator')
+    #model.summary()
 
-    return Model(inputs=[latent], outputs=[fake_image])
+    return model
